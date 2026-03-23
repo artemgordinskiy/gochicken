@@ -66,6 +66,20 @@ func (ps *Particles) EmitScorePop(x, y float64) {
 	ps.emit(x, y, 6, 255, 220, 50, 1.5, 0.045)
 }
 
+// EmitFeather spawns a small feather puff while airborne.
+func (ps *Particles) EmitFeather(x, y float64) {
+	ps.pool = append(ps.pool, particle{
+		x: x + spriteSize/2 + (rand.Float64()*14 - 7),
+		y: y + spriteSize*0.6,
+		vx:    rand.Float64()*0.8 - 0.4,
+		vy:    -(rand.Float64() * 0.5),
+		life:  1,
+		decay: 0.05 + rand.Float64()*0.04,
+		size:  1.5 + rand.Float64()*2.5,
+		r:     255, g: 248, b: 235,
+	})
+}
+
 func (ps *Particles) Update() {
 	alive := ps.pool[:0]
 	for i := range ps.pool {

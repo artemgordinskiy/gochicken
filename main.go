@@ -11,7 +11,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ebiten.SetWindowSize(screenWidth, screenHeight)
+	ebiten.SetWindowSize(screenWidth*2, screenHeight*2)
 	ebiten.SetWindowTitle("Chicken Game")
 	if err := ebiten.RunGame(game); err != nil {
 		log.Fatal(err)

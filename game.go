@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"image/color"
 	"io"
 	"log"
@@ -25,8 +26,8 @@ const (
 	groundY    = screenHeight - 111
 	spriteSize = 50
 
-	gravity   = 0.35
-	jumpSpeed = -6.5
+	gravity   = 0.22
+	jumpSpeed = -5.2
 
 	sampleRate = 44100
 )
@@ -78,8 +79,9 @@ type Game struct {
 
 	// images
 	bgImage      *ebiten.Image
-	chickenImage *ebiten.Image
-	obsImage     *ebiten.Image
+	chickenGround [2]*ebiten.Image
+	chickenAir    *ebiten.Image
+	obsImages    []*ebiten.Image
 
 	// audio
 	audioCtx       *audio.Context
@@ -92,19 +94,10 @@ type Game struct {
 func NewGame() (*Game, error) {
 	g := &Game{}
 
-	var err error
-	g.bgImage, _, err = ebitenutil.NewImageFromFile("assets/bg.png")
-	if err != nil {
-		return nil, fmt.Errorf("load bg: %w", err)
-	}
-	g.chickenImage, _, err = ebitenutil.NewImageFromFile("assets/chicken.png")
-	if err != nil {
-		return nil, fmt.Errorf("load chicken: %w", err)
-	}
-	g.obsImage, _, err = ebitenutil.NewImageFromFile("assets/obstacle.png")
-	if err != nil {
-		return nil, fmt.Errorf("load obstacle: %w", err)
-	}
+	g.bgImage = genBackgroundImage()
+	g.obsImages = genObstacleImages()
+	g.chickenGround = [2]*ebiten.Image{genChickenGroundImage(0), genChickenGroundImage(1)}
+	g.chickenAir = genChickenAirImage()
 
 	g.audioCtx = audio.NewContext(sampleRate)
 
@@ -145,10 +138,7 @@ func (g *Game) playSound(pcm []byte) {
 	if pcm == nil || g.audioCtx == nil {
 		return
 	}
-	p, err := g.audioCtx.NewPlayerFromBytes(pcm)
-	if err != nil {
-		return
-	}
+	p := g.audioCtx.NewPlayerFromBytes(pcm)
 	p.Play()
 }
 
@@ -179,7 +169,7 @@ func (g *Game) Update() error {
 	switch g.state {
 	case StateTitle:
 		g.updateTitle()
-		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		if inpututil.IsKeyJustPressed(ebiten.KeySpace) || inpututil.IsKeyJustPressed(ebiten.KeyUp) {
 			g.reset()
 			g.state = StatePlaying
 		}
@@ -195,7 +185,7 @@ func (g *Game) Update() error {
 		} else {
 			g.shakeX, g.shakeY = 0, 0
 		}
-		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+		if inpututil.IsKeyJustPressed(ebiten.KeySpace) || inpututil.IsKeyJustPressed(ebiten.KeyUp) {
 			g.reset()
 			g.state = StatePlaying
 		}
@@ -226,7 +216,6 @@ func (g *Game) updatePlaying() {
 	if newSpeed > g.speed {
 		g.speed = newSpeed
 		g.speedUpTimer = 150
-		g.flash(255, 200, 0, 30)
 		g.playSound(g.milestoneSound)
 	}
 
@@ -241,6 +230,11 @@ func (g *Game) updatePlaying() {
 	if landed {
 		g.playSound(g.landSound)
 		g.particles.EmitDust(g.player.x, g.player.y)
+	}
+
+	// Feather trail while airborne.
+	if !g.player.onGround && g.ticks%4 == 0 {
+		g.particles.EmitFeather(g.player.x, g.player.y)
 	}
 
 	// Screen shake decay.
@@ -258,7 +252,7 @@ func (g *Game) updatePlaying() {
 	// Spawn obstacles.
 	g.spawnTimer--
 	if g.spawnTimer <= 0 {
-		g.obstacles = append(g.obstacles, newObstacle())
+		g.obstacles = append(g.obstacles, newObstacle(len(g.obsImages)))
 		interval := 180 - int(g.speed)*15
 		if interval < 60 {
 			interval = 60
@@ -292,7 +286,6 @@ func (g *Game) updatePlaying() {
 
 	// Milestone every 10 points.
 	if g.score/10 > prevScore/10 && g.score > 0 {
-		g.flash(255, 215, 0, 25)
 		g.playSound(g.milestoneSound)
 	}
 
@@ -318,12 +311,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case StateTitle:
 		g.drawBG(screen, 0, 0)
 		// Demo chicken: centred, doing the auto-hop.
+		titleImg := g.chickenGround[0]
+		if g.titleY < -2 {
+			titleImg = g.chickenAir
+		}
 		cx := float64(screenWidth/2 - spriteSize/2)
 		cy := float64(groundY-spriteSize) + g.titleY
 		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Scale(0.5, 0.5)
-		op.GeoM.Translate(cx, cy)
-		screen.DrawImage(g.chickenImage, op)
+		op.GeoM.Translate(-50, -50)
+		op.GeoM.Scale(-0.5, 0.5) // flip to face right
+		op.GeoM.Translate(cx+float64(spriteSize)/2, cy+float64(spriteSize)/2)
+		screen.DrawImage(titleImg, op)
 		g.drawTitleUI(screen)
 
 	case StatePlaying:
@@ -349,7 +347,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 func (g *Game) drawTitleUI(screen *ebiten.Image) {
 	g.drawPanel(screen, screenWidth/2-170, screenHeight/2-48, 340, 110)
 	ebitenutil.DebugPrintAt(screen, "C H I C K E N  G A M E", screenWidth/2-84, screenHeight/2-36)
-	ebitenutil.DebugPrintAt(screen, "Arrow keys: move    Space: jump", screenWidth/2-118, screenHeight/2-10)
+	ebitenutil.DebugPrintAt(screen, "Arrow keys: move   Space/Up: jump", screenWidth/2-118, screenHeight/2-10)
 	ebitenutil.DebugPrintAt(screen, "Double-jump is allowed!", screenWidth/2-88, screenHeight/2+8)
 	ebitenutil.DebugPrintAt(screen, "Press SPACE to start", screenWidth/2-76, screenHeight/2+32)
 }
@@ -370,9 +368,14 @@ func (g *Game) drawBG(screen *ebiten.Image, shakeX, shakeY float64) {
 
 func (g *Game) drawScene(screen *ebiten.Image) {
 	g.drawBG(screen, g.shakeX, g.shakeY)
-	g.player.draw(screen, g.chickenImage, g.shakeX, g.shakeY)
+	g.player.drawShadow(screen, g.shakeX, g.shakeY)
+	chickenImg := g.chickenGround[g.player.walkFrame()]
+	if !g.player.onGround {
+		chickenImg = g.chickenAir
+	}
+	g.player.draw(screen, chickenImg, g.shakeX, g.shakeY)
 	for _, o := range g.obstacles {
-		o.draw(screen, g.obsImage, g.shakeX, g.shakeY)
+		o.draw(screen, g.obsImages[o.variant], g.shakeX, g.shakeY)
 	}
 	g.particles.Draw(screen, g.shakeX, g.shakeY)
 	g.drawHUD(screen)
@@ -408,4 +411,59 @@ func (g *Game) drawOverlay(screen *ebiten.Image, c color.RGBA) {
 // Layout returns the logical screen dimensions.
 func (g *Game) Layout(_, _ int) (int, int) {
 	return screenWidth, screenHeight
+}
+
+func genBackgroundImage() *ebiten.Image {
+	w, h := screenWidth, screenHeight
+	rgba := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	for y := 0; y < h; y++ {
+		var r, g, b uint8
+		switch {
+		case y < groundY:
+			// Sky gradient: light blue at top, paler near horizon.
+			t := float64(y) / float64(groundY)
+			r = uint8(135 + t*50)
+			g = uint8(195 + t*25)
+			b = uint8(255 - t*20)
+		case y < groundY+3:
+			// Thin dirt strip at ground line.
+			r, g, b = 145, 115, 65
+		default:
+			// Grass ground, darkening with depth.
+			t := float64(y-groundY) / float64(h-groundY)
+			r = uint8(70 - t*35)
+			g = uint8(140 - t*55)
+			b = uint8(40 - t*20)
+		}
+		for x := 0; x < w; x++ {
+			rgba.SetRGBA(x, y, color.RGBA{r, g, b, 255})
+		}
+	}
+
+	img := ebiten.NewImageFromImage(rgba)
+
+	// Soft clouds.
+	cc := color.RGBA{255, 255, 255, 75}
+	drawCloud := func(cx, cy float32) {
+		vector.DrawFilledCircle(img, cx, cy, 30, cc, true)
+		vector.DrawFilledCircle(img, cx+24, cy-6, 22, cc, true)
+		vector.DrawFilledCircle(img, cx-20, cy+3, 20, cc, true)
+		vector.DrawFilledCircle(img, cx+8, cy-12, 18, cc, true)
+	}
+	drawCloud(110, 55)
+	drawCloud(360, 40)
+	drawCloud(530, 70)
+
+	// Grass tufts at ground line.
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 80; i++ {
+		x := float32(rng.Intn(w))
+		bladeH := float32(4 + rng.Intn(10))
+		green := uint8(110 + rng.Intn(70))
+		vector.DrawFilledRect(img, x, float32(groundY)-bladeH, 2, bladeH,
+			color.RGBA{25, green, 20, 200}, false)
+	}
+
+	return img
 }
